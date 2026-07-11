@@ -110,8 +110,7 @@
   (global-auto-revert-mode t)
   (save-place-mode t)
   (delete-selection-mode t)
-  (global-display-line-numbers-mode t)
-  (global-hl-line-mode t)
+  ; (global-hl-line-mode t)
   (global-so-long-mode t)
   (winner-mode t)
   (size-indication-mode 1)
@@ -147,10 +146,10 @@ The DWIM behaviour of this command is as follows:
   :bind
   (("C-c o" . switch-to-minibuffer)
    ("C-g"   . my/keyboard-quit-dwim))
+  :hook ((prog-mode text-mode) . display-line-numbers-mode)
   :custom
   (truncate-lines t)
   (line-spacing 1)
-  (which-function-update-delay 0.5)
   (ring-bell-function 'ignore)
   (use-short-answers t)
   (ffap-machine-p-known 'reject)
@@ -171,6 +170,12 @@ The DWIM behaviour of this command is as follows:
   (set-face-attribute 'fixed-pitch nil :family "PragmataPro Mono Liga" :height 170)
   (set-face-attribute 'variable-pitch nil :family "PragmataPro Mono Liga" :height 170)
   (put 'downcase-region 'disabled nil))
+
+(use-package exec-path-from-shell
+  :config
+  (dolist (var '("DOTNET_ROOT"))
+    (add-to-list 'exec-path-from-shell-variables var))
+  (exec-path-from-shell-initialize))
 
 (use-package savehist
   :ensure nil
@@ -253,9 +258,11 @@ The DWIM behaviour of this command is as follows:
 
 (use-package embark
   :bind
-  ( :map minibuffer-local-map
-    ("C-c C-c" . embark-collect)
-    ("C-c C-e" . embark-export))
+  (("C-." . embark-act)
+   ("C-;" . embark-dwim)
+   :map minibuffer-local-map
+   ("C-c C-c" . embark-collect)
+   ("C-c C-e" . embark-export))
   :init
   (setq prefix-help-command #'embark-prefix-help-command))
 
@@ -283,9 +290,53 @@ The DWIM behaviour of this command is as follows:
                 (setq-local corfu-auto nil)
                 (corfu-mode 1)))))
 
-(use-package alabaster-themes
+(use-package emacs
+  :ensure nil
   :config
-  (load-theme 'alabaster-themes-light t))
+  (if (daemonp)
+      (add-hook 'server-after-make-frame-hook
+                (lambda () (load-theme 'modus-automata t)))
+    (load-theme 'modus-automata t)))
+
+(use-package ghostel
+  :bind (("s-l" . my/ghostel-toggle)
+         :map ghostel-semi-char-mode-map
+         ("C-k"  . my/ghostel-send-C-k-and-kill)
+         ("M-p" . (lambda () (interactive) (ghostel-send-key "p" "ctrl")))
+         ("M-n" . (lambda () (interactive) (ghostel-send-key "n" "ctrl")))
+         :map project-prefix-map
+         ("m" . ghostel-project)
+         ("M" . ghostel-project-list-buffers))
+  :config
+  (defun my/ghostel-toggle ()
+    "Open ghostel, or go back to the previous buffer if it's the only window."
+    (interactive)
+    (if (derived-mode-p 'ghostel-mode)
+        (switch-to-prev-buffer)
+      (ghostel)))
+
+  (defun my/ghostel-send-C-k-and-kill ()
+    "Send `C-k' to ghostel.
+Like normal Emacs `C-k'.  Kill to end of line and put content in kill-ring."
+    (interactive)
+    (kill-ring-save (point) (line-end-position))
+    (ghostel-send-key "k" "ctrl"))
+
+  (add-to-list 'project-switch-commands '(ghostel-project "Ghostel") t)
+  (add-to-list 'project-switch-commands '(ghostel-project-list-buffers "Ghostel buffers") t)
+  (add-to-list 'ghostel-eval-cmds '("magit-status-setup-buffer" magit-status-setup-buffer)))
+
+(use-package ghostel-eshell
+  :ensure nil
+  :hook (eshell-load . ghostel-eshell-visual-command-mode))
+
+(use-package ghostel-compile
+  :ensure nil
+  :hook (after-init . ghostel-compile-global-mode))
+
+(use-package ghostel-comint
+  :ensure nil
+  :hook (after-init . ghostel-comint-global-mode))
 
 (use-package minions
   :hook (after-init . minions-mode)
@@ -294,15 +345,17 @@ The DWIM behaviour of this command is as follows:
 (use-package expand-region
   :bind ("C-=" . er/expand-region))
 
+(use-package treesit-auto
+  :custom
+  (treesit-auto-install 'prompt)
+  :config
+  (global-treesit-auto-mode))
+
 (use-package lsp-mode
   :commands (lsp lsp-deferred)
   :init
   (setq lsp-use-plists t)
   (setq lsp-keymap-prefix "C-c l")
-  (let ((local-bin (expand-file-name "~/.local/bin")))
-    (when (file-directory-p local-bin)
-      (add-to-list 'exec-path local-bin)
-      (setenv "PATH" (concat local-bin path-separator (getenv "PATH")))))
   :hook ((lsp-mode . lsp-enable-which-key-integration))
   :config
   (setq
@@ -374,11 +427,7 @@ The DWIM behaviour of this command is as follows:
 (use-package csharp-mode
   :ensure nil
   :mode ("\\.cs\\'" . csharp-ts-mode)
-  :hook (csharp-ts-mode . lsp-deferred)
-  :init
-  (let ((dotnet-root "/usr/local/share/dotnet"))
-    (when (file-directory-p dotnet-root)
-      (setenv "DOTNET_ROOT" dotnet-root))))
+  :hook (csharp-ts-mode . lsp-deferred))
 
 (use-package lsp-pyright
   :init
@@ -414,11 +463,6 @@ The DWIM behaviour of this command is as follows:
   :mode ("\\.hs\\'" . haskell-mode)
   :hook ((haskell-mode . lsp-deferred)
          (haskell-mode . interactive-haskell-mode))
-  :init
-  (let ((ghcup-bin (expand-file-name "~/.ghcup/bin")))
-    (when (file-directory-p ghcup-bin)
-      (add-to-list 'exec-path ghcup-bin)
-      (setenv "PATH" (concat ghcup-bin path-separator (getenv "PATH")))))
   :custom
   (haskell-process-type 'cabal-repl)
   (haskell-process-suggest-remove-import-lines t)
@@ -433,15 +477,16 @@ The DWIM behaviour of this command is as follows:
   :bind ("s-j" . avy-goto-char-timer))
 
 (use-package diff-hl
-  :hook (after-init . global-diff-hl-mode))
+  :hook ((after-init . global-diff-hl-mode)
+         (after-init . diff-hl-flydiff-mode)))
 
 (use-package magit
-  :commands (magit-status magit-dispatch magit-file-dispatch)
   :bind (("C-x g" . magit-status))
   :custom
   (magit-display-buffer-function #'magit-display-buffer-same-window-except-diff-v1)
   (magit-diff-refine-hunk t)
   :config
+  (add-hook 'magit-pre-refresh-hook 'diff-hl-magit-pre-refresh)
   (add-hook 'magit-post-refresh-hook 'diff-hl-magit-post-refresh))
 
 (use-package dired
@@ -464,6 +509,17 @@ The DWIM behaviour of this command is as follows:
   (ediff-split-window-function 'split-window-horizontally)
   (ediff-window-setup-function 'ediff-setup-windows-plain))
 
+(use-package compile
+  :ensure nil
+  :init
+  (defun my/compilation-select-window (proc)
+    "Select the window showing the compilation buffer for PROC."
+    (when-let ((win (get-buffer-window (process-buffer proc))))
+      (select-window win)))
+  :hook (compilation-start . my/compilation-select-window)
+  :custom
+  (compilation-scroll-output t))
+
 (use-package ace-window
   :bind (("s-o" . ace-window)
          ("s-p" . ace-delete-other-windows)
@@ -474,4 +530,42 @@ The DWIM behaviour of this command is as follows:
 
 (use-package sharper
   :bind
-  ("C-c n" . sharper-main-transient))
+  ("C-c c" . sharper-main-transient))
+
+(use-package org
+  :ensure nil
+  :bind ("C-c a" . org-agenda)
+  :custom
+  (org-directory "~/org")
+  ;; Agenda scans this subdir non-recursively; keeps denote/ and verb/ out.
+  (org-agenda-files (list (expand-file-name "agenda" org-directory))))
+
+(use-package verb
+  :after org
+  :config
+  (define-key org-mode-map (kbd "C-c C-r") verb-command-map))
+
+(use-package denote
+  :bind
+  (("C-c n n" . denote)
+   ("C-c n o" . denote-open-or-create)
+   ("C-c n l" . denote-link)
+   ("C-c n b" . denote-backlinks)
+   ("C-c n r" . denote-rename-file)
+   ("C-c n d" . denote-dired))
+  :custom
+  (denote-directory "~/org/denote"))
+
+(use-package clutch
+  :commands (clutch-query-console clutch-query-sqlite-file)
+  :custom
+  ;; Omit :password so clutch resolves credentials auth-source, which
+  ;; searches ~/.authinfo(.gpg) by :host/:user/:port.  Each connection needs
+  ;; a matching line, where the tokens map to the plist keys below:
+  ;;   machine HOST login USER port PORT password SECRET
+  ;; e.g. for the dev-pg entry:
+  ;;   machine 127.0.0.1 login postgres port 5432 password secret
+  (clutch-connection-alist
+   '(("ownership_graph" . (:backend pg
+				    :host "127.0.0.1" :port 5432
+				    :user "ownership_graph_user" :database "ownership_graph")))))
