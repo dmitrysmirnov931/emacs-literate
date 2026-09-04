@@ -352,8 +352,8 @@ STRING, TABLE, PRED and POINT are the usual `try-completion' arguments."
   :config
   (if (daemonp)
       (add-hook 'server-after-make-frame-hook
-                (lambda () (load-theme 'modus-automata t)))
-    (load-theme 'modus-automata t)))
+                (lambda () (load-theme 'modus-operandi-tinted t)))
+    (load-theme 'modus-operandi-tinted t)))
 
 (use-package ghostel
   :bind (("s-l" . my/ghostel-toggle)
@@ -604,3 +604,4 @@ the server which interpreter to analyse against, the job that
    '(("ownership_graph" . (:backend pg
 				    :host "127.0.0.1" :port 5432
 				    :user "ownership_graph_user" :database "ownership_graph")))))
+(put 'narrow-to-region 'disabled nil)
