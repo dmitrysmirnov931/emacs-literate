@@ -1,3 +1,5 @@
+;;; init.el --- Personal Emacs configuration  -*- lexical-binding: t; -*-
+
 (require 'package)
 (add-to-list 'package-archives '("melpa"        . "https://melpa.org/packages/") t)
 (add-to-list 'package-archives '("melpa-stable" . "https://stable.melpa.org/packages") t)
@@ -69,10 +71,6 @@
 	save-place-file                (expand-file-name "save-place.el" my/var-dir)
   	tramp-persistency-file-name    (expand-file-name "tramp.el" my/var-dir))
   (when (file-exists-p custom-file) (load custom-file nil t))
-
-  (with-eval-after-load 'lsp-mode
-    (setq lsp-session-file       (expand-file-name "lsp-session" my/var-dir)
-	  lsp-server-install-dir (expand-file-name "lsp-servers/" my/var-dir)))
 
   ;; Compress auto-save/backup file names so deep paths don't overflow.
   (defun my/make-hashed-auto-save-file-name-a (fn)
@@ -157,7 +155,6 @@ The DWIM behaviour of this command is as follows:
   (scroll-conservatively most-positive-fixnum)
   (eldoc-echo-area-use-multiline-p nil)
   (display-line-numbers-type 'relative)
-  (enable-recursive-minibuffers t)
   (read-extended-command-predicate #'command-completion-default-include-p)
   (save-interprogram-paste-before-kill t)
   (imenu-auto-rescan t)
@@ -198,30 +195,96 @@ The DWIM behaviour of this command is as follows:
   (which-key-add-column-padding 1)
   (which-key-sort-order 'which-key-key-order-alpha))
 
-(use-package vertico
-  :hook (after-init . vertico-mode)
-  :custom
-  (vertico-cycle t)
-  (vertico-count 15)
-  (vertico-resize nil))
+;;; Completion.
+;;
+;; Emacs 31 turns the builtin "*Completions*" buffer into a full replacement
+;; for vertico (minibuffer UI), corfu (in-buffer popup), marginalia
+;; (annotations) and orderless (matching).  The two options that make it work
+;; are new in 31: `completion-eager-display' shows the buffer without pressing
+;; TAB, and `completion-eager-update' refreshes it as you type.  Both default
+;; to `auto', meaning "only if the completion table asks for it", and almost
+;; nothing asks.  See
+;; https://rahuljuliato.com/posts/completions-buffer-is-now-enough
 
-(use-package vertico-directory
+(defun my/flex-noinsert-try-completion (string table pred point)
+  "Flex `try-completion' that never auto-extends the input on TAB.
+
+The stock `flex' style does two jobs: it filters candidates by fuzzy
+match, and its `try-completion' merges the survivors and inserts their
+common expansion.  With `tab-always-indent' set to `complete' that merge
+happens on TAB, so Emacs silently types a candidate -- often a distant,
+wrong one -- before \"*Completions*\" is ever shown.  Eglot works around
+this with its own `eglot--dumb-flex', which skips the merge but also
+loses flex's relevance scoring.
+
+This wrapper keeps flex's filtering and scoring and drops only the merge:
+
+  - no candidates          -> nil, no match
+  - exactly one candidate  -> complete it fully, the one case where the
+                              merge cannot be wrong
+  - two or more candidates -> return STRING unchanged, so TAB only pops
+                              \"*Completions*\" and inserts nothing
+
+STRING, TABLE, PRED and POINT are the usual `try-completion' arguments."
+  (let ((all (completion-flex-all-completions string table pred point)))
+    (cond
+     ((null all) nil)
+     ((= (safe-length all) 1)
+      (let ((sole (car all)))
+        (if (string= sole string) t (cons sole (length sole)))))
+     (t (cons string point)))))
+
+(add-to-list 'completion-styles-alist
+             '(flex-noinsert
+               my/flex-noinsert-try-completion
+               completion-flex-all-completions
+               "Flex matching that never extends input on TAB."))
+
+;; Reuse flex's metadata tweak so "*Completions*" sorts by flex score rather
+;; than alphabetically.
+(put 'flex-noinsert 'completion--adjust-metadata
+     'completion--flex-adjust-metadata)
+
+(defun my/minibuffer-truncate-lines ()
+  "Keep minibuffer lines unwrapped."
+  (setq truncate-lines t))
+
+(use-package minibuffer
   :ensure nil
-  :after vertico
-  :bind (:map vertico-map
-	      ("RET"   . vertico-directory-enter)
-	      ("DEL"   . vertico-directory-delete-char)
-	      ("M-DEL" . vertico-directory-delete-word))
-  :hook (rfn-eshadow-update-overlay . vertico-directory-tidy))
-
-(use-package orderless
+  :bind (:map minibuffer-visible-completions-up-down-map
+              ("C-n" . minibuffer-next-completion)
+              ("C-p" . minibuffer-previous-completion)
+              :map completion-in-region-mode-map
+              ("C-n" . minibuffer-next-completion)
+              ("C-p" . minibuffer-previous-completion))
+  :hook ((minibuffer-setup . cursor-intangible-mode)
+         (minibuffer-setup . my/minibuffer-truncate-lines))
   :custom
-  (completion-styles '(orderless basic))
-  (completion-category-defaults nil)
-  (completion-category-overrides '((file (styles basic partial-completion)))))
-
-(use-package marginalia
-  :hook (after-init . marginalia-mode))
+  (tab-always-indent 'complete)
+  (completion-auto-help t)
+  (completion-auto-select t)
+  (completion-eager-display t)
+  (completion-eager-update t)
+  (completion-show-help nil)
+  (completion-ignore-case t)
+  (read-buffer-completion-ignore-case t)
+  (read-file-name-completion-ignore-case t)
+  (completion-styles '(partial-completion flex initials))
+  ;; Only Eglot gets the no-insert variant.  The minibuffer keeps stock flex,
+  ;; where the merge is harmless because you can see what it did.
+  (completion-category-overrides '((eglot-capf (styles flex-noinsert))))
+  (completions-format 'one-column)
+  (completions-max-height 15)
+  (completions-sort 'historical)
+  (completions-detailed t)
+  (minibuffer-visible-completions 'up-down)
+  ;; Recursive minibuffers plus the depth indicator that makes them readable:
+  ;; the prompt gains a [2] so you know how deep you are.
+  (enable-recursive-minibuffers t)
+  (minibuffer-depth-indicate-mode t)
+  (minibuffer-electric-default-mode t)
+  (minibuffer-prompt-properties
+   '(read-only t intangible t cursor-intangible t face minibuffer-prompt)))
 
 (use-package embark-consult
   :after (embark consult)
@@ -266,29 +329,23 @@ The DWIM behaviour of this command is as follows:
   :init
   (setq prefix-help-command #'embark-prefix-help-command))
 
-(use-package corfu
-  :hook (after-init . global-corfu-mode)
-  :bind (:map corfu-map
-              ("TAB"       . corfu-next)
-              ("<tab>"     . corfu-next)
-              ("S-TAB"     . corfu-previous)
-              ("<backtab>" . corfu-previous))
+;; In-buffer completion is the same "*Completions*" buffer: `tab-always-indent'
+;; is `complete' above, so TAB indents the line if it needs it, then completes.
+;; Completion Preview is the builtin stand-in for `corfu-auto', showing the
+;; leading candidate inline as you type.  TAB is unbound in its keymap so it
+;; keeps popping "*Completions*" instead of silently accepting the preview.
+(use-package completion-preview
+  :ensure nil
+  :hook (after-init . global-completion-preview-mode)
+  :bind (:map completion-preview-active-mode-map
+              ("TAB"   . nil)
+              ("<tab>" . nil)
+              ("M-i"   . completion-preview-insert)
+              ("M-n"   . completion-preview-next-candidate)
+              ("M-p"   . completion-preview-prev-candidate))
   :custom
-  (corfu-auto t)
-  (corfu-auto-prefix 2)
-  (corfu-auto-delay 0.15)
-  (corfu-cycle t)
-  (corfu-preselect 'prompt)
-  (corfu-quit-no-match 'separator)
-  (corfu-popupinfo-delay '(0.4 . 0.2))
-  (tab-always-indent 'complete)
-  :config
-  (corfu-popupinfo-mode 1)
-  (add-hook 'minibuffer-setup-hook
-            (lambda ()
-              (unless (bound-and-true-p vertico--input)
-                (setq-local corfu-auto nil)
-                (corfu-mode 1)))))
+  (completion-preview-minimum-symbol-length 2)
+  (completion-preview-idle-delay 0.15))
 
 (use-package emacs
   :ensure nil
@@ -345,99 +402,74 @@ Like normal Emacs `C-k'.  Kill to end of line and put content in kill-ring."
 (use-package expand-region
   :bind ("C-=" . er/expand-region))
 
-(use-package treesit-auto
+;; Emacs 31 does treesit-auto's job builtin: `treesit-enabled-modes' rewrites
+;; `major-mode-remap-alist' from `treesit-major-mode-remap-alist', so .py and
+;; .cs open in their ts-modes without per-mode `:mode' entries, and
+;; `treesit-auto-install-grammar' fetches missing grammars on demand.
+(use-package treesit
+  :ensure nil
   :custom
-  (treesit-auto-install 'prompt)
-  :config
-  (global-treesit-auto-mode))
+  (treesit-enabled-modes t)
+  (treesit-auto-install-grammar 'ask))
 
-(use-package lsp-mode
-  :commands (lsp lsp-deferred)
+(use-package eglot
+  :ensure nil
+  :bind (:map eglot-mode-map
+              ("C-c l a" . eglot-code-actions)
+              ("C-c l r" . eglot-rename)
+              ("C-c l f" . eglot-format-buffer)
+              ("C-c l i" . eglot-find-implementation)
+              ("C-c l t" . eglot-find-typeDefinition)
+              ("C-c l R" . eglot-reconnect)
+              ("C-c l q" . eglot-shutdown)
+              ("C-c d"   . eldoc-doc-buffer))
+  :custom
+  (eglot-autoshutdown t)
+  (eglot-extend-to-xref t)
+  (eglot-sync-connect 1)
+  (eglot-report-progress 'messages)
+  ;; The events buffer allocates heavily on chatty servers; keep it empty
+  ;; unless something actually needs debugging.
+  (eglot-events-buffer-config '(:size 0 :format short))
+  :config
+  ;; Eglot's stock C# alternatives are omnisharp, OmniSharp, then csharp-ls.
+  ;; Only csharp-ls is on PATH here, and the old `lsp-disabled-clients'
+  ;; explicitly rejected it, so prefer the OmniSharp build already on disk.
+  (let ((omnisharp (expand-file-name "lsp-servers/omnisharp-roslyn/latest/OmniSharp"
+                                     my/var-dir)))
+    (add-to-list 'eglot-server-programs
+                 `((csharp-mode csharp-ts-mode)
+                   . ,(eglot-alternatives
+                       `((,omnisharp "-lsp") ("omnisharp" "-lsp") ("csharp-ls")))))))
+
+;; emacs-lsp-booster converts server JSON into elisp bytecode out of process.
+;; Eglot's supported integration lives outside ELPA.
+;; See https://github.com/jdtsmith/eglot-booster
+(use-package eglot-booster
+  :vc (:url "https://github.com/jdtsmith/eglot-booster" :rev :newest)
+  :if (executable-find "emacs-lsp-booster")
+  :defer t
   :init
-  (setq lsp-use-plists t)
-  (setq lsp-keymap-prefix "C-c l")
-  :hook ((lsp-mode . lsp-enable-which-key-integration))
-  :config
-  (setq
-        lsp-idle-delay 0.5
-        lsp-log-io nil
-        lsp-completion-provider :none
-        lsp-enable-file-watchers nil
-        lsp-file-watch-threshold 2000
-        lsp-enable-folding nil
-        lsp-enable-text-document-color nil
-        lsp-enable-on-type-formatting nil
-        lsp-enable-indentation nil
-        lsp-keep-workspace-alive nil
-        lsp-headerline-breadcrumb-enable t
-        lsp-headerline-breadcrumb-enable-symbol-numbers nil
-        lsp-headerline-breadcrumb-segments '(project file symbols)
-        lsp-modeline-code-actions-enable nil
-        lsp-diagnostics-provider :flymake
-        lsp-disabled-clients '(ruff csharp-ls))
-  (defun my/lsp-mode-setup-completion ()
-    (setf (alist-get 'styles (alist-get 'lsp-capf completion-category-defaults))
-          '(orderless)))
-  (add-hook 'lsp-completion-mode-hook #'my/lsp-mode-setup-completion)
+  ;; Soft-require rather than `:after', which expands to a hard `require'
+  ;; inside Eglot's load hook: a failed VC install would then take Eglot
+  ;; down with it instead of degrading to an unboosted server.
+  (with-eval-after-load 'eglot
+    (when (require 'eglot-booster nil t)
+      (eglot-booster-mode))))
 
-  (defun lsp-booster--advice-json-parse (old-fn &rest args)
-    (or (when (equal (following-char) ?#)
-          (let ((bytecode (read (current-buffer))))
-            (when (byte-code-function-p bytecode)
-              (funcall bytecode))))
-        (apply old-fn args)))
-  (advice-add (if (progn (require 'json) (fboundp 'json-parse-buffer))
-                  'json-parse-buffer 'json-read)
-              :around #'lsp-booster--advice-json-parse)
-
-  (defun lsp-booster--advice-final-command (old-fn cmd &optional test?)
-    (let ((orig-result (funcall old-fn cmd test?)))
-      (if (and (not test?)
-               (not (file-remote-p default-directory))
-               lsp-use-plists
-               (not (functionp 'json-rpc-connection)) ; not native json-rpc
-               (executable-find "emacs-lsp-booster"))
-          (progn
-            (when-let ((command-from-exec-path (executable-find (car orig-result))))
-              (setcar orig-result command-from-exec-path))
-            (message "Using emacs-lsp-booster for %s!" orig-result)
-            (cons "emacs-lsp-booster" orig-result))
-        orig-result)))
-  (advice-add 'lsp-resolve-final-command :around #'lsp-booster--advice-final-command))
-
-(use-package lsp-ui
-  :commands lsp-ui-mode
-  :bind (:map lsp-ui-mode-map
-              ([remap xref-find-definitions] . lsp-ui-peek-find-definitions)
-              ([remap xref-find-references]  . lsp-ui-peek-find-references)
-              ("C-c d" . lsp-ui-doc-glance))
-  :config
-  (setq lsp-ui-doc-enable nil
-        lsp-ui-doc-show-with-cursor nil
-        lsp-ui-doc-position 'at-point
-        lsp-ui-sideline-enable t
-        lsp-ui-sideline-show-hover nil
-        lsp-ui-sideline-show-code-actions nil))
-
-(use-package consult-lsp
-  :after (consult lsp-mode)
-  :bind (:map lsp-mode-map
-              ([remap xref-find-apropos] . consult-lsp-symbols)))
+;; Eglot renders LSP markdown documentation with `gfm-view-mode' when
+;; markdown-mode is installed; see `eglot-documentation-renderer'.
+(use-package markdown-mode
+  :mode ("\\.md\\'" . gfm-mode)
+  :custom
+  (markdown-fontify-code-blocks-natively t))
 
 (use-package csharp-mode
   :ensure nil
-  :mode ("\\.cs\\'" . csharp-ts-mode)
-  :hook (csharp-ts-mode . lsp-deferred))
-
-(use-package lsp-pyright
-  :init
-  (setq lsp-pyright-langserver-command "basedpyright")
-  :config
-  (setq lsp-pyright-multi-root nil))
+  :hook (csharp-ts-mode . eglot-ensure))
 
 (use-package python
   :ensure nil
-  :mode ("\\.py\\'" . python-ts-mode)
   :hook (python-ts-mode . my/python-setup)
   :init
   (defun my/python-find-venv ()
@@ -447,31 +479,34 @@ Like normal Emacs `C-k'.  Kill to end of line and put content in kill-ring."
       (expand-file-name "venv" dir)))
 
   (defun my/python-setup ()
-    "Point Python tooling at the project's venv before LSP starts."
+    "Point Python tooling at the project's venv, then start Eglot.
+Prepending the venv's bin to `exec-path' is what lets Eglot find the
+project-local `basedpyright-langserver', which is already first in Eglot's
+list of Python alternatives.  `eglot-workspace-configuration' then tells
+the server which interpreter to analyse against, the job that
+`lsp-pyright-venv-path' used to do."
     (when-let* ((venv (my/python-find-venv))
                 (bin  (expand-file-name "bin" venv)))
       (setq-local exec-path (cons bin exec-path))
-      (setq-local lsp-pyright-venv-path venv)
       (setq-local python-shell-virtualenv-root venv)
+      (setq-local eglot-workspace-configuration
+                  `(:python (:pythonPath ,(expand-file-name "python" bin))))
       (setenv "VIRTUAL_ENV" venv))
-    (require 'lsp-pyright)
-    (lsp-deferred))
+    (eglot-ensure))
   :custom
   (python-indent-guess-indent-offset-verbose nil))
 
+;; Eglot's default Haskell contact is already
+;; ("haskell-language-server-wrapper" "--lsp"), so lsp-haskell had nothing
+;; left to configure.
 (use-package haskell-mode
   :mode ("\\.hs\\'" . haskell-mode)
-  :hook ((haskell-mode . lsp-deferred)
+  :hook ((haskell-mode . eglot-ensure)
          (haskell-mode . interactive-haskell-mode))
   :custom
   (haskell-process-type 'cabal-repl)
   (haskell-process-suggest-remove-import-lines t)
   (haskell-process-auto-import-loaded-modules t))
-
-(use-package lsp-haskell
-  :after lsp-mode
-  :custom
-  (lsp-haskell-server-path "haskell-language-server-wrapper"))
 
 (use-package avy
   :bind ("s-j" . avy-goto-char-timer))
@@ -514,7 +549,7 @@ Like normal Emacs `C-k'.  Kill to end of line and put content in kill-ring."
   :init
   (defun my/compilation-select-window (proc)
     "Select the window showing the compilation buffer for PROC."
-    (when-let ((win (get-buffer-window (process-buffer proc))))
+    (when-let* ((win (get-buffer-window (process-buffer proc))))
       (select-window win)))
   :hook (compilation-start . my/compilation-select-window)
   :custom

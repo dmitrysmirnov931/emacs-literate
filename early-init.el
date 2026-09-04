@@ -1,3 +1,5 @@
+;;; early-init.el --- Pre-GUI startup tuning  -*- lexical-binding: t; -*-
+
 (setq gc-cons-threshold most-positive-fixnum
       gc-cons-percentage 1.0)
 
@@ -42,5 +44,4 @@
   (startup-redirect-eln-cache
    (expand-file-name "var/eln-cache/" user-emacs-directory)))
 
-(setenv "LSP_USE_PLISTS" "true")
 
